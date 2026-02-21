@@ -1,0 +1,7 @@
+QUERIES
+AVG_OIL well_id=W1
+DATA
+W1,100,1,1,1
+
+W1,110,1,1,1
+END
