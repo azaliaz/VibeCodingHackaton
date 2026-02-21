@@ -3,7 +3,6 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.*;
 
-
 public class Solution {
 
     private static class WellStats {
@@ -40,60 +39,66 @@ public class Solution {
 
     private static class PressureWindowProcessor {
         final int W;
-        long count = 0L;
-        final Deque<long[]> maxDeque = new ArrayDeque<>();
-        final Deque<long[]> minDeque = new ArrayDeque<>();
+        long size = 0L; // количество ранее обработанных элементов (т.е. индекс нового = size)
+        final Deque<long[]> maxDeque = new ArrayDeque<>(); // each element: {index, Double.doubleToRawLongBits(value)}
         double best = Double.NEGATIVE_INFINITY;
 
         PressureWindowProcessor(int W) {
             this.W = W;
         }
 
+        // Добавляем очередное давление в поток (индекс = size)
         void add(double value) {
-            long idx = count;
-            long packed = Double.doubleToRawLongBits(value);
+            long idx = size;
 
+            // lowerBound — минимально допустимый индекс, который должен быть в префиксе
+            long lowerBound = idx - (W - 1);
+
+            // Убираем устаревшие элементы (индексы < lowerBound)
+            while (!maxDeque.isEmpty()) {
+                long[] front = maxDeque.peekFirst();
+                if (front[0] < lowerBound) maxDeque.pollFirst();
+                else break;
+            }
+
+            // Если до добавления текущего элемента уже есть хотя бы W-1 предыдущих,
+            // то окно размера W (оканчивающееся в текущем элементе) полно:
+            // префикс (i < j) — это индексы в deque (они принадлежат [lowerBound, idx-1]).
+            if (size >= (W - 1)) {
+                if (!maxDeque.isEmpty()) {
+                    double curMaxPref = Double.longBitsToDouble(maxDeque.peekFirst()[1]);
+                    double candidate = curMaxPref - value; // p_i - p_j, i from prefix, j = current
+                    if (candidate > best) best = candidate;
+                } else {
+                    // Нет ни одного префиксного элемента (т.е. W==1 case или префикс пуст) — ничего не делаем
+                }
+            }
+
+            // Теперь добавляем текущий элемент как потенциальный префикс для будущих элементов:
+            long packed = Double.doubleToRawLongBits(value);
             while (!maxDeque.isEmpty()) {
                 long[] back = maxDeque.peekLast();
                 double backVal = Double.longBitsToDouble(back[1]);
-                if (backVal <= value) maxDeque.pollLast();
-                else break;
+                if (backVal <= value) {
+                    maxDeque.pollLast();
+                } else break;
             }
             maxDeque.offerLast(new long[]{idx, packed});
 
-            while (!minDeque.isEmpty()) {
-                long[] back = minDeque.peekLast();
-                double backVal = Double.longBitsToDouble(back[1]);
-                if (backVal >= value) minDeque.pollLast();
-                else break;
-            }
-            minDeque.offerLast(new long[]{idx, packed});
-
-            count++;
-
-            long lowerBound = idx - (W - 1);
-            while (!maxDeque.isEmpty()) {
-                long[] front = maxDeque.peekFirst();
-                if (front[0] < lowerBound) maxDeque.pollFirst(); else break;
-            }
-            while (!minDeque.isEmpty()) {
-                long[] front = minDeque.peekFirst();
-                if (front[0] < lowerBound) minDeque.pollFirst(); else break;
-            }
-
-            if (count >= W) {
-                double curMax = Double.longBitsToDouble(maxDeque.peekFirst()[1]);
-                double curMin = Double.longBitsToDouble(minDeque.peekFirst()[1]);
-                double diff = curMax - curMin;
-                if (diff > best) best = diff;
-            }
+            // Увеличиваем счётчик (следующий добавляемый будет иметь индекс size)
+            size++;
         }
 
+        // Возвращает результат или null если insufficient data or invalid W
         Double getResultOrNull() {
-            if (W <= 0) return null;
-            if (count < W) return null;
+            if (W <= 0) return null;            // per spec
+            if (size < W) return null;          // недостаточно записей
+            // если W == 1 — внутри окна нет i<j пар, по спецификации считаем 0
+            if (W == 1) return 0.0;
+            // Возвращаем неотрицательное значение: если best так и не обновлялся или был отрицательным, вернём 0.
+            // Это соответствует новой семантике: "максимальное падение по времени" не может быть отрицательным — если падений нет, 0.
             if (best == Double.NEGATIVE_INFINITY) return 0.0;
-            return best;
+            return Math.max(0.0, best);
         }
     }
 
@@ -118,6 +123,7 @@ public class Solution {
             return;
         }
 
+        // Разбираем запросы PRESSURE_DROP заранее, собирая уникальные W для каждой скважины
         Map<String, Set<Integer>> pressureRequests = new HashMap<>();
         for (String q : queries) {
             if (q.startsWith("PRESSURE_DROP")) {
@@ -131,6 +137,7 @@ public class Solution {
             }
         }
 
+        // Создаём процессоры для каждой пары (well, W)
         Map<String, List<PressureWindowProcessor>> processors = new HashMap<>();
         if (!pressureRequests.isEmpty()) {
             for (Map.Entry<String, Set<Integer>> e : pressureRequests.entrySet()) {
@@ -148,6 +155,7 @@ public class Solution {
         final Map<String, Pending> pending = new HashMap<>();
         final Map<String, WellStats> stats = new HashMap<>();
 
+        // читаем DATA в стриме — дедупликация по (well, ts) с помощью pending
         while ((line = br.readLine()) != null) {
             String trimmed = line.trim();
             if (trimmed.equals("END")) break;
@@ -156,7 +164,7 @@ public class Solution {
             String[] parts = trimmed.split(",", -1);
             if (parts.length != 5) continue;
             String well = parts[0];
-            if (well.isEmpty()) continue;
+            if (well == null || well.isEmpty()) continue;
 
             long ts;
             double oil, water, pressure;
@@ -168,6 +176,7 @@ public class Solution {
             } catch (Exception ex) {
                 continue;
             }
+
             if (Double.isNaN(oil) || Double.isNaN(water) || Double.isInfinite(oil) || Double.isInfinite(water)) continue;
             if (oil < 0.0 || water < 0.0) continue;
 
@@ -176,24 +185,30 @@ public class Solution {
                 pending.put(well, new Pending(ts, oil, water, pressure));
             } else {
                 if (ts == p.ts) {
+                    // duplicate timestamp for this well -> last wins
                     p.replace(oil, water, pressure);
                 } else if (ts > p.ts) {
+                    // финализируем pending запись
                     WellStats st = stats.get(well);
                     if (st == null) { st = new WellStats(); stats.put(well, st); }
                     st.add(p.oil, p.water);
 
+                    // передаём давление в процессоры (если есть)
                     List<PressureWindowProcessor> procs = processors.get(well);
                     if (procs != null) {
                         for (PressureWindowProcessor proc : procs) proc.add(p.pressure);
                     }
 
+                    // новый pending
                     pending.put(well, new Pending(ts, oil, water, pressure));
                 } else {
+                    // ts < pending.ts — в контракте для одной скважины времена не убывают => игнорируем
                     continue;
                 }
             }
         }
 
+        // финализируем оставшиеся pending
         for (Map.Entry<String, Pending> e : pending.entrySet()) {
             String well = e.getKey();
             Pending p = e.getValue();
@@ -215,38 +230,41 @@ public class Solution {
     private static void processQueriesAndPrint(List<String> queries,
                                                Map<String, WellStats> stats,
                                                Map<String, List<PressureWindowProcessor>> processors) {
-        List<String> answers = new ArrayList<>(queries.size());
+        StringBuilder out = new StringBuilder();
 
         for (String qLine : queries) {
             String q = qLine.trim();
-            if (q.isEmpty()) { answers.add(""); continue; }
+            if (q.isEmpty()) {
+                out.append("\n");
+                continue;
+            }
 
             if (q.startsWith("AVG_OIL")) {
                 String wellId = parseParam(q, "well_id");
-                if (wellId == null) { answers.add("NA"); continue; }
+                if (wellId == null) { out.append("NA\n"); continue; }
                 WellStats st = stats.get(wellId);
-                if (st == null || st.count == 0) answers.add("NA");
-                else answers.add(String.format(Locale.US, "%.6f", st.sumOil / (double) st.count));
+                if (st == null || st.count == 0) out.append("NA\n");
+                else out.append(String.format(Locale.US, "%.6f", st.sumOil / (double) st.count)).append("\n");
 
             } else if (q.startsWith("WATER_CUT")) {
                 String wellId = parseParam(q, "well_id");
-                if (wellId == null) { answers.add("NA"); continue; }
+                if (wellId == null) { out.append("NA\n"); continue; }
                 WellStats st = stats.get(wellId);
-                if (st == null || st.count == 0) answers.add("NA");
+                if (st == null || st.count == 0) out.append("NA\n");
                 else {
                     double sumOil = st.sumOil;
                     double sumWater = st.sumWater;
                     double sumFluid = sumOil + sumWater;
-                    if (sumFluid == 0.0) answers.add(String.format(Locale.US, "%.6f", 0.0));
-                    else answers.add(String.format(Locale.US, "%.6f", sumWater / sumFluid));
+                    if (sumFluid == 0.0) out.append(String.format(Locale.US, "%.6f", 0.0)).append("\n");
+                    else out.append(String.format(Locale.US, "%.6f", sumWater / sumFluid)).append("\n");
                 }
 
             } else if (q.startsWith("TOP_WELLS_BY_OIL")) {
                 String kStr = parseParam(q, "k");
-                if (kStr == null) { answers.add(""); continue; }
+                if (kStr == null) { out.append("\n"); continue; }
                 int k;
-                try { k = Integer.parseInt(kStr); if (k <= 0) { answers.add(""); continue; } }
-                catch (Exception ex) { answers.add(""); continue; }
+                try { k = Integer.parseInt(kStr); if (k <= 0) { out.append("\n"); continue; } }
+                catch (Exception ex) { out.append("\n"); continue; }
 
                 PriorityQueue<Map.Entry<String, WellStats>> pq =
                         new PriorityQueue<>((a, b) -> {
@@ -262,7 +280,7 @@ public class Solution {
                     if (pq.size() > k) pq.poll();
                 }
 
-                if (pq.isEmpty()) { answers.add(""); continue; }
+                if (pq.isEmpty()) { out.append("\n"); continue; }
                 List<Map.Entry<String, WellStats>> result = new ArrayList<>(pq);
                 result.sort((a, b) -> {
                     int cmp = Double.compare(b.getValue().sumOil, a.getValue().sumOil);
@@ -274,34 +292,31 @@ public class Solution {
                     if (i > 0) sb.append(',');
                     sb.append(result.get(i).getKey());
                 }
-                answers.add(sb.toString());
+                out.append(sb.toString()).append("\n");
 
             } else if (q.startsWith("PRESSURE_DROP")) {
                 String wellId = parseParam(q, "well_id");
                 String wStr = parseParam(q, "window");
-                if (wellId == null || wStr == null) { answers.add("NA"); continue; }
+                if (wellId == null || wStr == null) { out.append("NA\n"); continue; }
                 int W;
-                try { W = Integer.parseInt(wStr); } catch (Exception ex) { answers.add("NA"); continue; }
-                if (W <= 0) { answers.add("NA"); continue; }
+                try { W = Integer.parseInt(wStr); } catch (Exception ex) { out.append("NA\n"); continue; }
+                if (W <= 0) { out.append("NA\n"); continue; }
 
                 List<PressureWindowProcessor> procs = processors.get(wellId);
-                if (procs == null || procs.isEmpty()) { answers.add("NA"); continue; }
+                if (procs == null || procs.isEmpty()) { out.append("NA\n"); continue; }
                 PressureWindowProcessor found = null;
                 for (PressureWindowProcessor p : procs) if (p.W == W) { found = p; break; }
-                if (found == null) { answers.add("NA"); continue; }
+                if (found == null) { out.append("NA\n"); continue; }
                 Double res = found.getResultOrNull();
-                if (res == null) answers.add("NA");
-                else answers.add(String.format(Locale.US, "%.6f", res.doubleValue()));
+                if (res == null) out.append("NA\n");
+                else out.append(String.format(Locale.US, "%.6f", res.doubleValue()));
+                out.append("\n");
             } else {
-                answers.add("");
+                out.append("\n");
             }
         }
 
-        if (!answers.isEmpty()) {
-            String output = String.join("\n", answers);
-            // Print with single trailing newline (standard POSIX text file style)
-            System.out.println(output);
-        }
+        System.out.print(out.toString());
     }
 
     private static String parseParam(String q, String paramName) {
